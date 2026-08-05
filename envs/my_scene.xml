@@ -1,0 +1,42 @@
+<!--
+    自定义 MuJoCo 场景模板
+    用法:
+        python -m mujoco.viewer --mjcf envs/my_scene.xml
+
+    关于 meshdir：被 include 的 panda.xml 内设了 meshdir="assets"（相对路径），
+    但 MuJoCo 从父文件解析 meshdir，导致找不到 STL 网格。
+    因此在父文件中显式指定绝对路径的 meshdir 覆盖。
+-->
+<mujoco model="custom_scene">
+    <!-- 解决 mesh 路径问题：被 include 的 panda.xml 有 meshdir="assets"，
+         该路径从父文件目录解析。这里用绝对路径覆盖。
+         如果换用其他机器人，改 meshdir 为其 assets 目录即可。 -->
+    <compiler angle="radian"
+              meshdir="/home/wcs/mujoco/menagerie/franka_emika_panda/assets"
+              autolimits="true"/>
+
+  <!-- 导入 Panda 机械臂模型 -->
+  <include file="../../menagerie/franka_emika_panda/panda.xml"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.1 0.1 0.1" specular="0.9 0.9 0.9"/>
+  </visual>
+
+  <asset>
+    <texture type="2d" name="table_tex" builtin="checker" mark="edge"
+             rgb1="0.3 0.3 0.3" rgb2="0.2 0.2 0.2"
+             markrgb="0.1 0.1 0.1" width="300" height="300"/>
+    <material name="table_mat" texture="table_tex" texuniform="true"
+              texrepeat="3 3" reflectance="0.1"/>
+  </asset>
+
+  <worldbody>
+    <!-- 地面 -->
+    <geom name="floor" size="0 0 0.01" type="plane" rgba="0.5 0.5 0.5 1"/>
+
+    <!-- 桌子（放在机械臂正前方） -->
+    <body name="table" pos="0.45 0 0">
+      <geom type="box" size="0.25 0.25 0.02" material="table_mat"/>
+    </body>
+  </worldbody>
+</mujoco>

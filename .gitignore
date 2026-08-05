@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+*.conda/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# 实验输出（不提交大文件/临时文件）
+results/logs/*.log
+results/figures/*.png
+*.mp4
+
+# 训练权重
+*.pth
+*.pt
+checkpoints/
+
+# macOS
+.DS_Store
+
+# MuJoCo
+*.mjb
