@@ -63,3 +63,4 @@ python scripts/eval.py
 - 本地使用指南: `~/mujoco/README.md`
 # summer-camp-2026
 # summer-camp-2026
+# summer-camp-2026
