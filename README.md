@@ -61,7 +61,3 @@ python scripts/eval.py
 - dm_control: https://github.com/google-deepmind/dm_control
 - 模型库: `~/mujoco/menagerie/`
 - 本地使用指南: `~/mujoco/README.md`
-# summer-camp-2026
-# summer-camp-2026
-# summer-camp-2026
-# summer-camp-2026
