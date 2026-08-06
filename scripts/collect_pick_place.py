@@ -62,10 +62,14 @@ def build_scene_xml():
     <!-- ===== 地面 ===== -->
     <geom name="floor" size="0 0 0.01" type="plane" rgba="0.5 0.5 0.5 1"/>
 
-    <!-- ===== 录制摄像机 ===== -->
-    <!-- 从右前方俯视，框住整个 pick-and-place 操作区域 -->
+    <!-- ===== 录制摄像机 + 灯光 ===== -->
+    <!-- 固定摄像机: 从右前上方俯视操作区 [0.4, 0, 0.2] -->
     <camera name="record_cam" mode="fixed"
-            pos="0.8 -0.5 0.6" xyaxes="-0.7 -0.7 0 0.4 -0.4 0.8"/>
+            pos="1.0 -0.6 0.8"
+            xyaxes="0.707 0.707 0  -0.408 0.408 0.816"/>
+    <!-- Offscreen 渲染没有 headlight，显式加灯光 -->
+    <light name="record_light" pos="0.5 -0.5 1.5" dir="0 -0.5 -1"
+           directional="true" diffuse="0.8 0.8 0.8" specular="0.3 0.3 0.3"/>
 
     <!-- ===== 桌子 ===== -->
     <!-- 桌面：40cm × 40cm × 2cm，桌体中心在 z=0.04，桌面在 z=0.06 -->
@@ -102,6 +106,12 @@ def build_scene_xml():
 
     # 注入到 </worldbody> 之前
     panda_str = panda_str.replace("</worldbody>", scene_elements + "\n  </worldbody>")
+
+    # 注入渲染配置到 </mujoco> 之前（camera/light 需在 mujoco 级别，不在 worldbody 内）
+    render_elements = """
+  <statistic center="0.4 0 0.3" extent="0.8" meansize="0.05"/>
+  """
+    panda_str = panda_str.replace("</mujoco>", render_elements + "\n</mujoco>")
 
     return panda_str
 
