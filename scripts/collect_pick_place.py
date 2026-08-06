@@ -63,15 +63,15 @@ def build_scene_xml():
     <geom name="floor" size="0 0 0.01" type="plane" rgba="0.5 0.5 0.5 1"/>
 
     <!-- ===== 录制摄像机 + 灯光 ===== -->
-    <!-- 左前上方视角，能看到夹爪和方块的完整侧向接触 -->
+    <!-- 固定摄像机: 从右前上方俯视操作区 [0.4, 0, 0.2] -->
     <camera name="record_cam" mode="fixed"
-            pos="0.2 -0.6 0.5"
-            xyaxes="0.95 0.3 0  -0.25 0.7 0.65"/>
-    <!-- 双灯光模拟 viewer 的立体光照效果 -->
-    <light name="record_light1" pos="0.8 -0.3 1.2" dir="-0.3 0.2 -1"
+            pos="1.0 -0.6 0.8"
+            xyaxes="0.707 0.707 0  -0.408 0.408 0.816"/>
+    <!-- Offscreen 渲染没有 headlight，显式加灯光 -->
+    <light name="record_light" pos="0.8 -0.3 1.2" dir="-0.3 0.2 -1"
            directional="true" diffuse="0.7 0.7 0.7" specular="0.2 0.2 0.2"/>
-    <light name="record_light2" pos="0.0 -0.8 0.4" dir="0.4 0.8 -0.5"
-           directional="false" diffuse="0.3 0.3 0.35" specular="0.1 0.1 0.1"/>
+    <light name="record_ambient" pos="0.4 0 0.5" dir="0 0 -1"
+           directional="false" diffuse="0.3 0.3 0.35" specular="0 0 0"/>
 
     <!-- ===== 桌子 ===== -->
     <!-- 桌面：40cm × 40cm × 2cm，桌体中心在 z=0.04，桌面在 z=0.06 -->
@@ -610,10 +610,10 @@ def main():
         # ---- arm: 使用 ctrl 驱动（PD 平滑跟踪，与 viewer 行为一致） ----
         data.ctrl[:7] = q_arm
 
-        # ---- 手指: 渐进式开合（避免瞬时挤压方块） ----
-        # 目标手指位置: 0.0=闭合, 0.04=张开
+        # ---- 手指: ctrl 力控驱动（与 viewer 一致，触点自然停止） ----
+        # 渐进式目标位置，映射为 ctrl 值通过肌腱/PD 驱动
+        # 关键: 使用 ctrl 而非 qpos，物理接触力会阻止手指穿透方块
         target_finger = 0.0 if gripper_cmd < 128 else 0.04
-        # 每帧最多移动 0.001（缓慢渐进）
         step_size = 0.001
         if abs(target_finger - current_finger_pos) < step_size:
             current_finger_pos = target_finger
@@ -622,8 +622,9 @@ def main():
         else:
             current_finger_pos += step_size
 
-        data.qpos[7] = current_finger_pos
-        data.qpos[8] = current_finger_pos
+        # ctrl 映射: finger_qpos = 0.04 * ctrl/255
+        # → ctrl = 255 * finger_qpos / 0.04
+        data.ctrl[7] = 255.0 * current_finger_pos / 0.04
 
         # 记录（step 之前）
         obs = np.concatenate([data.qpos.copy(), data.qvel.copy()])
