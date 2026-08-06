@@ -194,7 +194,9 @@ def main():
         with mujoco.viewer.launch_passive(model, data) as viewer:
             step = 0
             while viewer.is_running() and step < args.max_steps:
-                obs = np.concatenate([data.qpos.copy(), data.qvel.copy()])
+                raw_obs = np.concatenate([data.qpos.copy(), data.qvel.copy()])
+                time_feat = np.array([step / args.max_steps])
+                obs = np.concatenate([raw_obs, time_feat])
                 act = policy.predict(obs)
                 data.ctrl[:7] = act[:7]
                 data.ctrl[7] = max(0.0, min(255.0, act[7]))
