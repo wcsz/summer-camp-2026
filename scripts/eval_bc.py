@@ -78,7 +78,11 @@ def run_rollout(model, data, policy, block_id, max_steps=1200):
     # 3. 方向正确: 最终 Y > 初始 Y + 2cm（目标方向是 Y+=15cm）
     moved_right = block_end_xy[1] > block_start_xy[1] + 0.02
 
-    return displacement, max_lift, lifted, placed, moved_right, block_traj
+    # 学术界主流标准: 最终位置距目标 [0.4, 0.15] < 5cm
+    target_xy = np.array([0.4, 0.15])
+    dist_to_target = float(np.linalg.norm(block_end_xy - target_xy))
+
+    return displacement, max_lift, lifted, placed, moved_right, dist_to_target, block_traj
 
 
 def run_rollout_with_render(model, data, policy, block_id, video_path=None,
@@ -162,7 +166,7 @@ def main():
     # ---- 评估 ----
     displacements = []
     success_flags = []
-    detail_lines = []
+    target_flags = []
     first_noise = None
     for ep in range(args.episodes):
         # 每个 episode 前重置方块状态（避免上一轮的残留）
@@ -186,33 +190,42 @@ def main():
             )
             lifted = placed = moved_right = False
             max_lift = 0.0
+            dist_to_target = 999.0
         else:
-            disp, max_lift, lifted, placed, moved_right, _ = run_rollout(
+            disp, max_lift, lifted, placed, moved_right, dist_to_target, _ = run_rollout(
                 model, data, policy, block_id, max_steps=args.max_steps,
             )
 
         displacements.append(disp)
 
-        # 四标准评判真正的 pick-and-place:
-        # ① 位移 > 10cm  ② 被抬起  ③ 被放下（最终高度接近初始） ④ 方向正确（右移）
-        is_success = disp > 0.10 and lifted and placed and moved_right
-        success_flags.append(is_success)
+        # 四标准评判（严格）
+        is_strict = disp > 0.10 and lifted and placed and moved_right
+        # 学术主流标准: 距目标 < 5cm
+        is_target = dist_to_target < 0.05
+        success_flags.append(is_strict)
+        target_flags.append(is_target)
 
         checks = []
         checks.append(f"位移={disp:.3f}m {'✓' if disp>0.10 else '✗'}")
         checks.append(f"抬起 {'✓' if lifted else '✗'}(max_z={max_lift:.3f}m)")
         checks.append(f"放下 {'✓' if placed else '✗'}")
         checks.append(f"右移 {'✓' if moved_right else '✗'}")
-        status = "✅" if is_success else "❌"
+        checks.append(f"距目标={dist_to_target:.3f}m {'✓' if is_target else '✗'}")
+        status = "✅" if is_strict else ("🔵" if is_target else "❌")
         print(f"  Episode {ep+1}: {' | '.join(checks)} {status}")
 
     # ---- 汇总 ----
     disp_arr = np.array(displacements)
-    n_success = sum(success_flags)
+    n_strict = sum(success_flags)
+    n_target = sum(target_flags)
     print(f"\n[result] 评估汇总:")
-    print(f"  平均位移:  {disp_arr.mean():.3f}m ± {disp_arr.std():.3f}")
-    print(f"  真成功率(位移+抬起+放下+右移): {n_success}/{len(displacements)}"
-          f" ({100*n_success/max(1,len(displacements)):.0f}%)")
+    print(f"  平均位移:    {disp_arr.mean():.3f}m ± {disp_arr.std():.3f}")
+    print(f"  严格成功(四项全过):        {n_strict}/{len(displacements)}"
+          f" ({100*n_strict/max(1,len(displacements)):.0f}%)")
+    print(f"  学术标准(距目标<5cm):      {n_target}/{len(displacements)}"
+          f" ({100*n_target/max(1,len(displacements)):.0f}%)")
+    if n_target > n_strict:
+        print(f"  (🔵 = 距目标<5cm 但严格标准未全过，如被推飞恰好落在目标附近)")
 
     # ---- Viewer（可选） ----
     # viewer 重放第一个 episode 的场景，方便和终端输出的位移数据对照
