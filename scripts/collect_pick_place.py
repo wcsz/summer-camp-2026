@@ -89,18 +89,23 @@ def build_scene_xml():
 
     <!-- ===== 红色方块（可抓取） ===== -->
     <!-- 方盒底座（宽平，不会穿模）+ 方块 -->
+    <!-- 底座: 8cm 方盒，顶面 z=0.10，硬接触不穿模 -->
     <body name="block_pedestal" pos="0.4 0 0.06">
       <geom name="pedestal_geom" type="box" size="0.04 0.04 0.04"
-            rgba="0.3 0.3 0.3 1"/>
+            rgba="0.3 0.3 0.3 1"
+            solref="0.01 1" solimp="0.99 0.999 0.0001"
+            margin="0.001"/>
     </body>
-    <body name="block" pos="0.4 0 0.125">
+    <!-- 方块: 初始底面 z=0.105，距底座顶面 5mm，重力拉下后自然接触 -->
+    <body name="block" pos="0.4 0 0.130">
       <joint type="slide" axis="1 0 0" name="block_x" limited="true" range="-0.5 0.5" damping="1"/>
       <joint type="slide" axis="0 1 0" name="block_y" limited="true" range="-0.5 0.5" damping="1"/>
       <joint type="slide" axis="0 0 1" name="block_z" limited="true" range="-0.1 1.0" damping="2"/>
       <geom name="block_geom" type="box" size="0.02 0.02 0.025"
             rgba="0.9 0.15 0.15 1" mass="0.04"
             friction="5.0 0.5 0.1"
-            solmix="0.1" solref="0.005 2"/>
+            solref="0.01 1" solimp="0.99 0.999 0.0001"
+            margin="0.001"/>
     </body>
     """
 
@@ -512,7 +517,7 @@ def main():
                         default="results/pick_place_demo.npz",
                         help="输出 .npz 路径 (默认: results/pick_place_demo.npz)")
     parser.add_argument("--block-pos", nargs=3, type=float,
-                        default=[0.4, 0.0, 0.125],
+                        default=[0.4, 0.0, 0.130],
                         metavar=("X", "Y", "Z"),
                         help="方块初始位置 (默认: 0.5 0 0.075)")
     parser.add_argument("--target-offset", nargs=3, type=float,
