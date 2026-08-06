@@ -63,13 +63,15 @@ def build_scene_xml():
     <geom name="floor" size="0 0 0.01" type="plane" rgba="0.5 0.5 0.5 1"/>
 
     <!-- ===== 录制摄像机 + 灯光 ===== -->
-    <!-- 固定摄像机: 从右前上方俯视操作区 [0.4, 0, 0.2] -->
+    <!-- 左前上方视角，能看到夹爪和方块的完整侧向接触 -->
     <camera name="record_cam" mode="fixed"
-            pos="1.0 -0.6 0.8"
-            xyaxes="0.707 0.707 0  -0.408 0.408 0.816"/>
-    <!-- Offscreen 渲染没有 headlight，显式加灯光 -->
-    <light name="record_light" pos="0.5 -0.5 1.5" dir="0 -0.5 -1"
-           directional="true" diffuse="0.8 0.8 0.8" specular="0.3 0.3 0.3"/>
+            pos="0.2 -0.6 0.5"
+            xyaxes="0.95 0.3 0  -0.25 0.7 0.65"/>
+    <!-- 双灯光模拟 viewer 的立体光照效果 -->
+    <light name="record_light1" pos="0.8 -0.3 1.2" dir="-0.3 0.2 -1"
+           directional="true" diffuse="0.7 0.7 0.7" specular="0.2 0.2 0.2"/>
+    <light name="record_light2" pos="0.0 -0.8 0.4" dir="0.4 0.8 -0.5"
+           directional="false" diffuse="0.3 0.3 0.35" specular="0.1 0.1 0.1"/>
 
     <!-- ===== 桌子 ===== -->
     <!-- 桌面：40cm × 40cm × 2cm，桌体中心在 z=0.04，桌面在 z=0.06 -->
