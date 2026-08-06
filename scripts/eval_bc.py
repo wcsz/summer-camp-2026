@@ -153,13 +153,15 @@ def main():
     displacements = []
     for ep in range(args.episodes):
         # 泛化测试: 扰动方块初始位置
+        # 方块世界 X = body_pos_X(0.4) + qpos_X，所以要偏移 ±2cm 需设 qpos_X = noise
         if args.generalize:
-            noise = np.random.uniform(-0.02, 0.02, size=2)  # xy 扰动
-            # 通过修改 block 的 body 位置来扰动（需要在 reset 前完成）
-            # 简单做法: 直接修改 data.qpos 中 block 的 xy 初值
-            data.qpos[9] = 0.4 + noise[0]
-            data.qpos[10] = 0.0 + noise[1]
-            print(f"  Episode {ep+1}: block_xy=({data.qpos[9]:.3f}, {data.qpos[10]:.3f})")
+            noise = np.random.uniform(-0.02, 0.02, size=2)
+            data.qpos[9] = noise[0]   # block X 偏移
+            data.qpos[10] = noise[1]  # block Y 偏移
+            # 计算实际世界位置用于打印
+            mujoco.mj_forward(model, data)
+            block_world_xy = data.xpos[block_id][:2]
+            print(f"  Episode {ep+1}: block_world_xy=({block_world_xy[0]:.3f}, {block_world_xy[1]:.3f})")
 
         if args.record and ep == 0:
             disp = run_rollout_with_render(
@@ -184,11 +186,17 @@ def main():
 
     # ---- Viewer（可选） ----
     if not args.no_viewer and not args.record:
-        print(f"\n[viewer] 启动交互式 viewer 查看 rollout...")
+        mode_str = "泛化测试" if args.generalize else "原位置"
+        print(f"\n[viewer] 启动交互式 viewer ({mode_str})...")
         mujoco.mj_resetData(model, data)
         home_q = np.array([0, 0, 0, -1.57079, 0, 1.57079, -0.7853, 0.04, 0.04])
         data.qpos[:9] = home_q
         data.ctrl[:] = 0
+        # 泛化测试: 在 viewer 中也扰动方块位置
+        if args.generalize:
+            noise = np.random.uniform(-0.02, 0.02, size=2)
+            data.qpos[9] = noise[0]
+            data.qpos[10] = noise[1]
         mujoco.mj_forward(model, data)
 
         with mujoco.viewer.launch_passive(model, data) as viewer:
