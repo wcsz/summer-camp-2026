@@ -78,12 +78,16 @@ def build_scene_xml():
     </body>
 
     <!-- ===== 红色方块（可抓取，加高加大接触面积） ===== -->
-    <!-- 使用 3 个 slide 关节（仅平移，不允许旋转），防止被挤飞 -->
-    <!-- 桌面 z=0.06，方块半高 0.025，方块中心 z=0.085 -->
-    <body name="block" pos="0.4 0 0.085">
+    <!-- 方块放在 4cm 高的底座上，块中心在 z=0.125（为垂直手指留空间） -->
+    <!-- 底座: 4cm 高圆柱，方块: 4×4×5cm 立方体 -->
+    <body name="block_pedestal" pos="0.4 0 0.06">
+      <geom name="pedestal_geom" type="cylinder" size="0.025 0.04"
+            rgba="0.3 0.3 0.3 1"/>
+    </body>
+    <body name="block" pos="0.4 0 0.126">
       <joint type="slide" axis="1 0 0" name="block_x" limited="true" range="-0.5 0.5" damping="1"/>
       <joint type="slide" axis="0 1 0" name="block_y" limited="true" range="-0.5 0.5" damping="1"/>
-      <joint type="slide" axis="0 0 1" name="block_z" limited="true" range="0.01 1.0" damping="0"/>
+      <joint type="slide" axis="0 0 1" name="block_z" limited="true" range="-0.1 1.0" damping="2"/>
       <geom name="block_geom" type="box" size="0.02 0.02 0.025"
             rgba="0.9 0.15 0.15 1" mass="0.04"
             friction="5.0 0.5 0.1"
@@ -120,33 +124,79 @@ def load_scene():
 
 
 # ==============================================================================
-# 2. IK 求解器（适配 body 而非 site）
+# 2. IK 求解器（支持 3-DOF 位置 和 6-DOF 位姿）
 # ==============================================================================
+
+# 目标手部朝向：手指垂直向下，开合方向沿世界 Y 轴
+# R_target 列主序: X=[1,0,0], Y=[0,-1,0], Z=[0,0,-1]
+# (X=前, Y=后, Z=下 → 右手系)
+GRASP_ROTATION = np.array([
+    [1.0, 0.0, 0.0],   # 手部 X → 世界 X (前)
+    [0.0, -1.0, 0.0],  # 手部 Y → 世界 -Y (后，手指沿 Y 开合)
+    [0.0, 0.0, -1.0],  # 手部 Z → 世界 -Z (下，手指指向)
+])
+
+
+def _rotation_error(R_curr, R_target):
+    """计算从当前朝向到目标朝向的旋转误差（轴角表示）。
+
+    Args:
+        R_curr: (3,3) 当前旋转矩阵
+        R_target: (3,3) 目标旋转矩阵
+
+    Returns:
+        error: (3,) 轴角向量 (angle * axis)，方向=旋转轴，模长=旋转角度(rad)
+    """
+    R_err = R_target @ R_curr.T
+    trace = np.clip((np.trace(R_err) - 1.0) / 2.0, -1.0, 1.0)
+    theta = np.arccos(trace)
+
+    if abs(theta) < 1e-8:
+        return np.zeros(3)
+
+    axis = np.array([
+        R_err[2, 1] - R_err[1, 2],
+        R_err[0, 2] - R_err[2, 0],
+        R_err[1, 0] - R_err[0, 1],
+    ])
+    axis_norm = np.linalg.norm(axis)
+    if axis_norm < 1e-8:
+        return np.zeros(3)
+    axis = axis / axis_norm
+    return theta * axis
+
 
 def solve_ik_body(
     model, data, body_id, target_pos,
+    target_rot=None,
     init_q=None, regularization=0.1,
-    max_iter=200, tol=1e-4,
+    max_iter=500, tol=1e-4,
+    rot_weight=1.0,
 ):
-    """用阻尼最小二乘法求解逆运动学（body 版本）。
+    """6-DOF 逆运动学求解器（阻尼最小二乘法）。
 
-    与 Step 1 的 solve_ik 唯一区别:
-        - 使用 mj_jacBody(body_id) 而非 mj_jacSite(site_id)
-        - 使用 data.xpos[body_id] 而非 data.site_xpos[site_id]
+    支持两种模式:
+        3-DOF (仅位置): target_rot=None，只约束末端位置
+        6-DOF (完整位姿): target_rot 指定目标旋转矩阵，同时约束位置和朝向
 
-    原因: panda.xml 完整版无 attachment_site，但有 hand body (id=9)。
+    原理:
+        J = [J_p; J_r] ∈ ℝ^(6×7) 是完整雅可比
+        error = [Δp; Δθ] ∈ ℝ⁶ 是位姿误差
+        Δq = Jᵀ (J Jᵀ + λI)⁻¹ error
 
     Args:
-        model, data: MuJoCo 模型和数据
-        body_id: 末端 body 的 ID（hand body）
+        model, data: MuJoCo 模型/数据
+        body_id: 末端 body 的 ID
         target_pos: (3,) 目标位置
-        init_q: 初始关节角（前 7 维用于 arm）
+        target_rot: (3,3) 目标旋转矩阵，None 则仅约束位置
+        init_q: (7,) 初始关节角
         regularization: 阻尼系数 λ
         max_iter: 最大迭代次数
-        tol: 收敛容差 (m)
+        tol: 收敛容差 (位置: m, 朝向: rad)
+        rot_weight: 朝向误差的权重（相对于位置误差）
 
     Returns:
-        q_arm: (7,) arm 关节解
+        q_arm: (7,) 解
         success: bool
     """
     if init_q is not None:
@@ -154,27 +204,49 @@ def solve_ik_body(
 
     mujoco.mj_forward(model, data)
 
-    for i in range(max_iter):
-        current_pos = data.xpos[body_id].copy()
-        error = target_pos - current_pos
+    use_orientation = target_rot is not None
 
-        if float(np.linalg.norm(error)) < tol:
+    if use_orientation:
+        err_dim = 6
+    else:
+        err_dim = 3
+
+    for i in range(max_iter):
+        # --- 位置误差 ---
+        current_pos = data.xpos[body_id].copy()
+        pos_err = target_pos - current_pos
+
+        if use_orientation:
+            # --- 朝向误差 ---
+            R_curr = data.xmat[body_id].reshape(3, 3).copy()
+            rot_err = _rotation_error(R_curr, target_rot) * rot_weight
+            error = np.concatenate([pos_err, rot_err])
+        else:
+            error = pos_err
+
+        err_norm = float(np.linalg.norm(error))
+        if err_norm < tol:
             return data.qpos[:7].copy(), True
 
-        # 平移雅可比 (3 × nv)
+        # --- 雅可比 ---
         jacp = np.zeros((3, model.nv))
         jacr = np.zeros((3, model.nv))
         mujoco.mj_jacBody(model, data, jacp, jacr, body_id)
 
-        # 阻尼最小二乘
-        J = jacp  # (3 × 9), 但只前 7 列对应 arm joints
-        JJT = J @ J.T + regularization * np.eye(3)
-        delta_q_full = J.T @ np.linalg.solve(JJT, error)
+        if use_orientation:
+            J = np.vstack([jacp, jacr * rot_weight])  # (6, nv)
+        else:
+            J = jacp  # (3, nv)
 
-        # 只更新 arm 关节 (前 7 维)，不动手指和 block
-        data.qpos[:7] += delta_q_full[:7]
+        # 只取 arm 关节 (前 7 列)
+        J_arm = J[:, :7]
+        JJT = J_arm @ J_arm.T + regularization * np.eye(err_dim)
+        delta_q = J_arm.T @ np.linalg.solve(JJT, error)
 
-        # 钳制 arm 关节到限位
+        # --- 更新 arm 关节 ---
+        data.qpos[:7] += delta_q
+
+        # 钳制到关节限位
         for j in range(7):
             if model.jnt_limited[j]:
                 lo, hi = model.jnt_range[j]
@@ -183,8 +255,16 @@ def solve_ik_body(
 
         mujoco.mj_forward(model, data)
 
-    err_norm = float(np.linalg.norm(target_pos - data.xpos[body_id]))
-    return data.qpos[:7].copy(), err_norm < tol * 10
+    # 未收敛
+    pos_err_final = float(np.linalg.norm(target_pos - data.xpos[body_id]))
+    if use_orientation:
+        R_final = data.xmat[body_id].reshape(3, 3)
+        rot_err_final = float(np.linalg.norm(_rotation_error(R_final, target_rot)))
+        ok = pos_err_final < tol * 10 and rot_err_final < tol * 20
+    else:
+        ok = pos_err_final < tol * 10
+
+    return data.qpos[:7].copy(), ok
 
 
 # ==============================================================================
@@ -208,11 +288,13 @@ def define_phases(block_pos, target_offset=np.array([0.0, 0.15, 0.0])):
     b = np.asarray(block_pos, dtype=np.float64)
     t = b + np.asarray(target_offset, dtype=np.float64)
 
-    # hand body 到指尖的 Z 偏移约为 -0.014m（指尖在 hand body 下方）
-    # 因此 hand body 需要比方块中心高约 1.5cm，指尖才对齐方块中心
-    fingertip_offset_z = 0.015
+    # 手部垂直向下时，hand body → 指尖碰撞体中心的 Z 偏移
+    # hand body → finger body: 0.0584m (hand frame Z)
+    # finger body → fingertip pad: 0.0445m (finger frame Z)
+    # 指尖 pad 中心 Z = hand_Z - 0.0584 + 0.0445 = hand_Z - 0.0139
+    fingertip_offset_z = 0.014
 
-    z_ready = 0.35                  # 预备高度：方块正上方 35cm（避免碰撞）
+    z_ready = 0.45                  # 预备高度：方块正上方 45cm（充分避碰）
     z_above = b[2] + 0.08           # 接近高度：方块上方 8cm
     z_grasp = b[2] + fingertip_offset_z  # 抓取高度（指尖对齐方块）
     z_lift  = b[2] + 0.22           # 搬运高度
@@ -220,41 +302,34 @@ def define_phases(block_pos, target_offset=np.array([0.0, 0.15, 0.0])):
     z_place_above = t[2] + 0.10     # 撤离高度
 
     phases = [
-        # 阶段 0: 预备 —— 先移到方块正上方高处，避免碰撞
-        {"name": "ready",      "pos": np.array([b[0], b[1], z_ready]),
-         "gripper": 255, "hold_steps": 120},
+        # 阶段 0: 预备 —— 3-DOF IK，移到方块前方高处（避免 arm link 碰撞）
+        {"name": "ready",      "pos": np.array([b[0] + 0.05, b[1], z_ready]),
+         "gripper": 255, "hold_steps": 120, "rot": None},
 
-        # 阶段 1: 接近 —— 从预备高度降到方块上方
+        # 阶段 1~8: 全部使用 6-DOF IK（手指始终垂直向下）
         {"name": "approach",   "pos": np.array([b[0], b[1], z_above]),
-         "gripper": 255, "hold_steps": 100},
+         "gripper": 255, "hold_steps": 100, "rot": GRASP_ROTATION},
 
-        # 阶段 2: 下降抓取 —— 降到抓取高度
         {"name": "grasp",      "pos": np.array([b[0], b[1], z_grasp]),
-         "gripper": 255, "hold_steps": 100},
+         "gripper": 255, "hold_steps": 100, "rot": GRASP_ROTATION},
 
-        # 阶段 2b: 缓慢完全闭合（充分建立稳定接触）
         {"name": "close",      "pos": np.array([b[0], b[1], z_grasp]),
-         "gripper": 0,   "hold_steps": 300},
+         "gripper": 0,   "hold_steps": 300, "rot": GRASP_ROTATION},
 
-        # 阶段 3: 慢速抬起（防止加速度太大导致方块滑落）
         {"name": "lift",       "pos": np.array([b[0], b[1], z_lift]),
-         "gripper": 0,   "hold_steps": 150},
+         "gripper": 0,   "hold_steps": 150, "rot": GRASP_ROTATION},
 
-        # 阶段 4: 横向搬运
         {"name": "transport",  "pos": np.array([t[0], t[1], z_lift]),
-         "gripper": 0,   "hold_steps": 120},
+         "gripper": 0,   "hold_steps": 120, "rot": GRASP_ROTATION},
 
-        # 阶段 5: 下降放置
         {"name": "place",      "pos": np.array([t[0], t[1], z_place]),
-         "gripper": 0,   "hold_steps": 80},
+         "gripper": 0,   "hold_steps": 80, "rot": GRASP_ROTATION},
 
-        # 阶段 5b: 张开手指（释放方块，充分时间让其落下）
         {"name": "release",    "pos": np.array([t[0], t[1], z_place]),
-         "gripper": 255, "hold_steps": 150},
+         "gripper": 255, "hold_steps": 150, "rot": GRASP_ROTATION},
 
-        # 阶段 6: 撤离（方块此时应已落在桌面上）
         {"name": "retreat",    "pos": np.array([t[0], t[1], z_place_above]),
-         "gripper": 255, "hold_steps": 80},
+         "gripper": 255, "hold_steps": 80, "rot": GRASP_ROTATION},
     ]
     return phases
 
@@ -266,21 +341,24 @@ def define_phases(block_pos, target_offset=np.array([0.0, 0.15, 0.0])):
 def precompute_joint_trajectory(model, data, body_id, phases, home_q_arm):
     """对每个阶段的位点求解 IK，生成完整关节轨迹。
 
-    返回:
-        joint_traj: list of (q_arm(7), gripper_ctrl) 每帧的目标
+    每个 phase dict 可选包含:
+        - "rot": (3,3) 目标旋转矩阵，None 则仅做 3-DOF 位置 IK
     """
     joint_traj = []
     prev_q = home_q_arm.copy()
 
-    total_frames = sum(p["hold_steps"] for p in phases)
     ik_success = 0
     ik_total = 0
 
     for pi, phase in enumerate(phases):
+        target_rot = phase.get("rot", None)
+
         # 求解此阶段目标位点的 IK
         q_arm, ok = solve_ik_body(
             model, data, body_id, phase["pos"],
-            init_q=prev_q, regularization=0.1, max_iter=200, tol=1e-4,
+            target_rot=target_rot,
+            init_q=prev_q, regularization=0.1,
+            max_iter=500, tol=1e-4, rot_weight=0.5,
         )
         ik_total += 1
         if ok:
@@ -408,7 +486,7 @@ def main():
                         default="results/pick_place_demo.npz",
                         help="输出 .npz 路径 (默认: results/pick_place_demo.npz)")
     parser.add_argument("--block-pos", nargs=3, type=float,
-                        default=[0.4, 0.0, 0.085],
+                        default=[0.4, 0.0, 0.126],
                         metavar=("X", "Y", "Z"),
                         help="方块初始位置 (默认: 0.5 0 0.075)")
     parser.add_argument("--target-offset", nargs=3, type=float,
