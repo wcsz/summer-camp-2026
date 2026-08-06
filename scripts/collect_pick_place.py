@@ -77,34 +77,21 @@ def build_scene_xml():
             pos=" 0.17  0.17 -0.04" rgba="0.25 0.25 0.25 1"/>
     </body>
 
-    <!-- ===== 红色方块（可抓取，加高加大接触面积） ===== -->
-    <!-- 方块放在 4cm 高的底座上，块中心在 z=0.125（为垂直手指留空间） -->
-    <!-- 底座: 4cm 高圆柱，方块: 4×4×5cm 立方体 -->
+    <!-- ===== 红色方块（可抓取） ===== -->
+    <!-- 方盒底座（宽平，不会穿模）+ 方块 -->
     <body name="block_pedestal" pos="0.4 0 0.06">
-      <geom name="pedestal_geom" type="cylinder" size="0.025 0.04"
+      <geom name="pedestal_geom" type="box" size="0.04 0.04 0.04"
             rgba="0.3 0.3 0.3 1"/>
     </body>
-    <body name="block" pos="0.4 0 0.126">
+    <body name="block" pos="0.4 0 0.125">
       <joint type="slide" axis="1 0 0" name="block_x" limited="true" range="-0.5 0.5" damping="1"/>
       <joint type="slide" axis="0 1 0" name="block_y" limited="true" range="-0.5 0.5" damping="1"/>
       <joint type="slide" axis="0 0 1" name="block_z" limited="true" range="-0.1 1.0" damping="2"/>
       <geom name="block_geom" type="box" size="0.02 0.02 0.025"
             rgba="0.9 0.15 0.15 1" mass="0.04"
             friction="5.0 0.5 0.1"
-            solmix="0.2" solref="0.01 1"/>
+            solmix="0.1" solref="0.005 2"/>
     </body>
-
-    <!-- ===== 隐形导向墙（防止方块被碰撞弹飞） ===== -->
-    <!-- 4 面薄墙围住方块初始位置，形成 6cm×6cm 的\"笼子\" -->
-    <!-- 墙高 3cm（半高 1.5cm），方块被举起时会自然脱离 -->
-    <geom name="guide_north" type="box" size="0.03 0.003 0.015"
-          pos="0.4 0.033 0.09" rgba="0 0 0 0" contype="1" conaffinity="1"/>
-    <geom name="guide_south" type="box" size="0.03 0.003 0.015"
-          pos="0.4 -0.033 0.09" rgba="0 0 0 0" contype="1" conaffinity="1"/>
-    <geom name="guide_east" type="box" size="0.003 0.03 0.015"
-          pos="0.433 0 0.09" rgba="0 0 0 0" contype="1" conaffinity="1"/>
-    <geom name="guide_west" type="box" size="0.003 0.03 0.015"
-          pos="0.367 0 0.09" rgba="0 0 0 0" contype="1" conaffinity="1"/>
     """
 
     # 注入到 </worldbody> 之前
@@ -292,7 +279,7 @@ def define_phases(block_pos, target_offset=np.array([0.0, 0.15, 0.0])):
     # hand body → finger body: 0.0584m (hand frame Z)
     # finger body → fingertip pad: 0.0445m (finger frame Z)
     # 指尖 pad 中心 Z = hand_Z - 0.0584 + 0.0445 = hand_Z - 0.0139
-    fingertip_offset_z = 0.014
+    fingertip_offset_z = 0.09
 
     z_ready = 0.45                  # 预备高度：方块正上方 45cm（充分避碰）
     z_above = b[2] + 0.08           # 接近高度：方块上方 8cm
@@ -341,38 +328,50 @@ def define_phases(block_pos, target_offset=np.array([0.0, 0.15, 0.0])):
 def precompute_joint_trajectory(model, data, body_id, phases, home_q_arm):
     """对每个阶段的位点求解 IK，生成完整关节轨迹。
 
-    每个 phase dict 可选包含:
-        - "rot": (3,3) 目标旋转矩阵，None 则仅做 3-DOF 位置 IK
+    关键逻辑:
+        - 如果当前阶段的目标位置和朝向与上一阶段完全相同 → 跳过 IK，
+          直接复用上一阶段的 q_arm（避免冗余解漂移导致 arm 在 close 阶段移动）
+        - 否则调用 IK 求解器并做平滑插值
     """
     joint_traj = []
     prev_q = home_q_arm.copy()
+    prev_pos = None  # 上一阶段的目标位置
 
     ik_success = 0
     ik_total = 0
 
     for pi, phase in enumerate(phases):
         target_rot = phase.get("rot", None)
+        target_pos = phase["pos"]
 
-        # 求解此阶段目标位点的 IK
-        q_arm, ok = solve_ik_body(
-            model, data, body_id, phase["pos"],
-            target_rot=target_rot,
-            init_q=prev_q, regularization=0.1,
-            max_iter=500, tol=1e-4, rot_weight=0.5,
-        )
-        ik_total += 1
-        if ok:
-            ik_success += 1
+        # 位置没变 → 复用上一阶段的关节解（手臂不动）
+        # 这确保了 close 阶段手臂静止，只有手指在合拢
+        same_pos = prev_pos is not None and np.allclose(target_pos, prev_pos, atol=1e-6)
+
+        if same_pos:
+            # 位置没变，直接复用上一阶段的关节解（手臂不动）
+            q_arm = prev_q.copy()
+        else:
+            # 位置变了，求解 IK
+            q_arm, ok = solve_ik_body(
+                model, data, body_id, target_pos,
+                target_rot=target_rot,
+                init_q=prev_q, regularization=0.1,
+                max_iter=500, tol=1e-4, rot_weight=0.5,
+            )
+            ik_total += 1
+            if ok:
+                ik_success += 1
 
         # 阶段内插值: 从 prev_q 平滑过渡到 q_arm
         for step in range(phase["hold_steps"]):
             alpha = step / phase["hold_steps"]
-            # 用正弦缓入缓出让运动更自然
             alpha_smooth = 0.5 - 0.5 * np.cos(alpha * np.pi)
             interp_q = (1 - alpha_smooth) * prev_q + alpha_smooth * q_arm
             joint_traj.append((interp_q.copy(), phase["gripper"]))
 
         prev_q = q_arm.copy()
+        prev_pos = target_pos
 
     if ik_total > 0:
         print(f"[ik] 位点 IK: {ik_success}/{ik_total} 收敛")
@@ -486,7 +485,7 @@ def main():
                         default="results/pick_place_demo.npz",
                         help="输出 .npz 路径 (默认: results/pick_place_demo.npz)")
     parser.add_argument("--block-pos", nargs=3, type=float,
-                        default=[0.4, 0.0, 0.126],
+                        default=[0.4, 0.0, 0.125],
                         metavar=("X", "Y", "Z"),
                         help="方块初始位置 (默认: 0.5 0 0.075)")
     parser.add_argument("--target-offset", nargs=3, type=float,
