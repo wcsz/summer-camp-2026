@@ -64,10 +64,21 @@ def run_rollout(model, data, policy, block_id, max_steps=1200):
 
     block_traj = np.array(block_traj)
     block_end = block_traj[-1]
-    displacement = float(np.linalg.norm(block_end[:2] - block_start[:2]))
+    block_start_xy = block_start[:2]
+    block_end_xy = block_end[:2]
+
+    displacement = float(np.linalg.norm(block_end_xy - block_start_xy))
     max_lift = float(block_traj[:, 2].max())
-    lifted = max_lift > block_start[2] + 0.03  # 至少抬起 3cm
-    return displacement, max_lift, lifted, block_traj
+
+    # 三标准评判真正的 pick-and-place:
+    # 1. 被抬起: Z 最高点 > 初始 Z + 3cm
+    lifted = max_lift > block_start[2] + 0.03
+    # 2. 被放下: 最终 Z 接近初始高度（±5cm），说明方块被放置而非飞走
+    placed = abs(block_end[2] - block_start[2]) < 0.05
+    # 3. 方向正确: 最终 Y > 初始 Y + 2cm（目标方向是 Y+=15cm）
+    moved_right = block_end_xy[1] > block_start_xy[1] + 0.02
+
+    return displacement, max_lift, lifted, placed, moved_right, block_traj
 
 
 def run_rollout_with_render(model, data, policy, block_id, video_path=None,
@@ -150,10 +161,14 @@ def main():
 
     # ---- 评估 ----
     displacements = []
-    lifted_flags = []
-    max_lifts = []
+    success_flags = []
+    detail_lines = []
     first_noise = None
     for ep in range(args.episodes):
+        # 每个 episode 前重置方块状态（避免上一轮的残留）
+        data.qpos[9] = 0.0   # block X offset
+        data.qpos[10] = 0.0  # block Y offset
+        data.qpos[11] = 0.0  # block Z offset
         if args.generalize:
             noise = np.random.uniform(-0.02, 0.02, size=2)
             if first_noise is None:
@@ -169,34 +184,35 @@ def main():
                 model, data, policy, block_id,
                 video_path=args.video, max_steps=args.max_steps,
             )
-            lifted = None
-            max_lift = None
+            lifted = placed = moved_right = False
+            max_lift = 0.0
         else:
-            disp, max_lift, lifted, _ = run_rollout(
+            disp, max_lift, lifted, placed, moved_right, _ = run_rollout(
                 model, data, policy, block_id, max_steps=args.max_steps,
             )
 
         displacements.append(disp)
-        if lifted is not None:
-            lifted_flags.append(lifted)
-            max_lifts.append(max_lift)
 
-        # 双标准评判: 位移 > 10cm 且 被抬起过
-        is_success = disp > 0.10
-        if lifted is not None:
-            is_success = is_success and lifted
-        status = "✅" if is_success else ("⚠" if disp > 0.05 else "❌")
-        lift_str = f"max_z={max_lift:.3f}m" if max_lift is not None else ""
-        print(f"  Episode {ep+1}: 位移={disp:.3f}m {lift_str} {status}")
+        # 四标准评判真正的 pick-and-place:
+        # ① 位移 > 10cm  ② 被抬起  ③ 被放下（最终高度接近初始） ④ 方向正确（右移）
+        is_success = disp > 0.10 and lifted and placed and moved_right
+        success_flags.append(is_success)
+
+        checks = []
+        checks.append(f"位移={disp:.3f}m {'✓' if disp>0.10 else '✗'}")
+        checks.append(f"抬起 {'✓' if lifted else '✗'}(max_z={max_lift:.3f}m)")
+        checks.append(f"放下 {'✓' if placed else '✗'}")
+        checks.append(f"右移 {'✓' if moved_right else '✗'}")
+        status = "✅" if is_success else "❌"
+        print(f"  Episode {ep+1}: {' | '.join(checks)} {status}")
 
     # ---- 汇总 ----
     disp_arr = np.array(displacements)
-    n_lifted = sum(lifted_flags) if lifted_flags else 0
+    n_success = sum(success_flags)
     print(f"\n[result] 评估汇总:")
-    print(f"  平均位移:     {disp_arr.mean():.3f}m ± {disp_arr.std():.3f}")
-    print(f"  被抬起次数:   {n_lifted}/{len(lifted_flags) if lifted_flags else '?'}")
-    print(f"  成功率(位移>10cm 且 被抬起): {n_lifted}/{len(displacements)}"
-          f" ({100*n_lifted/max(1,len(displacements)):.0f}%)")
+    print(f"  平均位移:  {disp_arr.mean():.3f}m ± {disp_arr.std():.3f}")
+    print(f"  真成功率(位移+抬起+放下+右移): {n_success}/{len(displacements)}"
+          f" ({100*n_success/max(1,len(displacements)):.0f}%)")
 
     # ---- Viewer（可选） ----
     # viewer 重放第一个 episode 的场景，方便和终端输出的位移数据对照
