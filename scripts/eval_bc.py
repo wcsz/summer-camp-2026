@@ -229,23 +229,29 @@ def main():
             data.qpos[10] = first_noise[1]
         mujoco.mj_forward(model, data)
 
-        with mujoco.viewer.launch_passive(model, data) as viewer:
-            step = 0
-            finished = False
-            while viewer.is_running():
-                if not finished:
-                    raw_obs = np.concatenate([data.qpos.copy(), data.qvel.copy()])
-                    time_feat = np.array([min(step, args.max_steps - 1) / args.max_steps])
-                    obs = np.concatenate([raw_obs, time_feat])
-                    act = policy.predict(obs)
-                    data.ctrl[:7] = act[:7]
-                    data.ctrl[7] = max(0.0, min(255.0, act[7]))
-                    mujoco.mj_step(model, data)
-                    step += 1
-                    if step >= args.max_steps:
-                        finished = True
-                        print(f"  [viewer] rollout 完成 (共 {step} 步)，viewer 保持打开，按 Esc 退出")
-                viewer.sync()
+        try:
+            with mujoco.viewer.launch_passive(model, data) as viewer:
+                step = 0
+                finished = False
+                while viewer.is_running():
+                    try:
+                        if not finished:
+                            raw_obs = np.concatenate([data.qpos.copy(), data.qvel.copy()])
+                            time_feat = np.array([min(step, args.max_steps - 1) / args.max_steps])
+                            obs = np.concatenate([raw_obs, time_feat])
+                            act = policy.predict(obs)
+                            data.ctrl[:7] = act[:7]
+                            data.ctrl[7] = max(0.0, min(255.0, act[7]))
+                            mujoco.mj_step(model, data)
+                            step += 1
+                            if step >= args.max_steps:
+                                finished = True
+                                print(f"  [viewer] rollout 完成 (共 {step} 步)，关闭窗口退出")
+                        viewer.sync()
+                    except Exception:
+                        break  # 窗口被强制关闭时 viewer.sync() 可能抛异常
+        except Exception:
+            pass  # viewer 关闭时 OpenGL 上下文可能已销毁
 
     print("\n👋 完成")
 
