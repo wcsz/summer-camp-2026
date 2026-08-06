@@ -151,14 +151,16 @@ def main():
 
     # ---- 评估 ----
     displacements = []
+    first_noise = None  # 保存第一个 episode 的扰动，供 viewer 重放
     for ep in range(args.episodes):
         # 泛化测试: 扰动方块初始位置
         # 方块世界 X = body_pos_X(0.4) + qpos_X，所以要偏移 ±2cm 需设 qpos_X = noise
         if args.generalize:
             noise = np.random.uniform(-0.02, 0.02, size=2)
-            data.qpos[9] = noise[0]   # block X 偏移
-            data.qpos[10] = noise[1]  # block Y 偏移
-            # 计算实际世界位置用于打印
+            if first_noise is None:
+                first_noise = noise.copy()  # 保存 episode 1 的扰动
+            data.qpos[9] = noise[0]
+            data.qpos[10] = noise[1]
             mujoco.mj_forward(model, data)
             block_world_xy = data.xpos[block_id][:2]
             print(f"  Episode {ep+1}: block_world_xy=({block_world_xy[0]:.3f}, {block_world_xy[1]:.3f})")
@@ -185,18 +187,18 @@ def main():
           f"({100*(disp_arr > 0.10).mean():.0f}%)")
 
     # ---- Viewer（可选） ----
+    # viewer 重放第一个 episode 的场景，方便和终端输出的位移数据对照
     if not args.no_viewer and not args.record:
-        mode_str = "泛化测试" if args.generalize else "原位置"
-        print(f"\n[viewer] 启动交互式 viewer ({mode_str})...")
+        mode_str = f"泛化测试 (episode 1, 位移={displacements[0]:.3f}m)" if args.generalize else "原位置"
+        print(f"\n[viewer] 启动交互式 viewer — {mode_str}")
         mujoco.mj_resetData(model, data)
         home_q = np.array([0, 0, 0, -1.57079, 0, 1.57079, -0.7853, 0.04, 0.04])
         data.qpos[:9] = home_q
         data.ctrl[:] = 0
-        # 泛化测试: 在 viewer 中也扰动方块位置
-        if args.generalize:
-            noise = np.random.uniform(-0.02, 0.02, size=2)
-            data.qpos[9] = noise[0]
-            data.qpos[10] = noise[1]
+        # 重放第一个 episode 的初始方块位置
+        if args.generalize and first_noise is not None:
+            data.qpos[9] = first_noise[0]
+            data.qpos[10] = first_noise[1]
         mujoco.mj_forward(model, data)
 
         with mujoco.viewer.launch_passive(model, data) as viewer:
