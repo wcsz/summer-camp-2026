@@ -201,18 +201,21 @@ def main():
 
         with mujoco.viewer.launch_passive(model, data) as viewer:
             step = 0
-            while viewer.is_running() and step < args.max_steps:
-                raw_obs = np.concatenate([data.qpos.copy(), data.qvel.copy()])
-                time_feat = np.array([step / args.max_steps])
-                obs = np.concatenate([raw_obs, time_feat])
-                act = policy.predict(obs)
-                data.ctrl[:7] = act[:7]
-                data.ctrl[7] = max(0.0, min(255.0, act[7]))
-                mujoco.mj_step(model, data)
+            finished = False
+            while viewer.is_running():
+                if not finished:
+                    raw_obs = np.concatenate([data.qpos.copy(), data.qvel.copy()])
+                    time_feat = np.array([min(step, args.max_steps - 1) / args.max_steps])
+                    obs = np.concatenate([raw_obs, time_feat])
+                    act = policy.predict(obs)
+                    data.ctrl[:7] = act[:7]
+                    data.ctrl[7] = max(0.0, min(255.0, act[7]))
+                    mujoco.mj_step(model, data)
+                    step += 1
+                    if step >= args.max_steps:
+                        finished = True
+                        print(f"  [viewer] rollout 完成 (共 {step} 步)，viewer 保持打开，按 Esc 退出")
                 viewer.sync()
-                step += 1
-                if step % 300 == 0:
-                    print(f"  viewer step {step}/{args.max_steps}")
 
     print("\n👋 完成")
 
