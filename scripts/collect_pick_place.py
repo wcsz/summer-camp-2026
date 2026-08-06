@@ -600,9 +600,8 @@ def main():
     current_finger_pos = 0.04  # 初始张开
 
     for frame_idx, (q_arm, gripper_cmd) in enumerate(joint_traj):
-        # ---- arm: 直接设 qpos（完美跟踪 IK） ----
-        data.qpos[:7] = q_arm
-        data.qvel[:7] = 0.0
+        # ---- arm: 使用 ctrl 驱动（PD 平滑跟踪，与 viewer 行为一致） ----
+        data.ctrl[:7] = q_arm
 
         # ---- 手指: 渐进式开合（避免瞬时挤压方块） ----
         # 目标手指位置: 0.0=闭合, 0.04=张开
