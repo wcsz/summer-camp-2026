@@ -12,6 +12,9 @@ import argparse
 import sys
 from pathlib import Path
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import numpy as np
 
 # 把 algorithms 目录加入 Python 路径
@@ -19,22 +22,33 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from algorithms.bc import BCTrainer
 
 
+def plot_loss_curve(history, output_path):
+    """绘制训练/验证 loss 曲线。"""
+    fig, ax = plt.subplots(figsize=(8, 5))
+    epochs = range(1, len(history['train_loss']) + 1)
+    ax.plot(epochs, history['train_loss'], label='Train Loss', alpha=0.7)
+    ax.plot(epochs, history['val_loss'], label='Val Loss', alpha=0.7)
+    ax.axvline(x=history['val_loss'].index(min(history['val_loss'])) + 1,
+               color='gray', linestyle='--', alpha=0.5, label='Best Epoch')
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('MSE Loss')
+    ax.set_title('BC Training Loss')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=100)
+    plt.close(fig)
+    print(f"[plot] Loss 曲线已保存: {output_path}")
+
+
 def print_loss_summary(history):
-    """打印 loss 曲线摘要（无需 matplotlib）。"""
+    """打印 loss 摘要。"""
     train = history['train_loss']
     val = history['val_loss']
-    n = len(train)
-    print(f"\n[loss] 训练曲线摘要 ({n} epochs):")
+    print(f"\n[loss] 训练摘要 ({len(train)} epochs):")
     print(f"  Train: {train[0]:.6f} → {train[-1]:.6f}")
     print(f"  Val:   {val[0]:.6f} → {val[-1]:.6f}")
     print(f"  Best val: {min(val):.6f} @ epoch {val.index(min(val))+1}")
-    # 简单的 ASCII 曲线
-    if n > 1:
-        width = 40
-        v_min, v_max = min(min(train), min(val)), max(train[0], val[0])
-        if v_max > v_min:
-            print(f"  Train: {'█' * int((train[0]-train[-1])/(train[0]-v_min+1e-8)*width) if train[-1] < train[0] else '—'}")
-            print(f"  Val:   {'█' * int((val[0]-val[-1])/(val[0]-v_min+1e-8)*width) if val[-1] < val[0] else '—'}")
 
 
 def main():
@@ -53,6 +67,8 @@ def main():
                         help='Early stop 等待轮数 (默认: 50)')
     parser.add_argument('--output', '-o', type=str, default='results/bc_model.pth',
                         help='模型输出路径')
+    parser.add_argument('--plot', type=str, default='results/bc_loss.png',
+                        help='Loss 曲线图输出路径')
     args = parser.parse_args()
 
     # ---- 加载数据 ----
@@ -93,7 +109,8 @@ def main():
     # ---- 保存模型 ----
     trainer.save(args.output)
 
-    # ---- 打印 loss 摘要 ----
+    # ---- 绘制 loss 曲线 + 打印摘要 ----
+    plot_loss_curve(history, args.plot)
     print_loss_summary(history)
 
     # ---- 最终指标 ----
