@@ -39,6 +39,8 @@ def run_rollout(model, data, policy, block_id, max_steps=1200):
 
     Returns:
         displacement: 方块的水平位移 (m)
+        max_lift: 方块达到的最高 Z (m)
+        lifted: 方块是否被抬起过（max_lift > init_z + 3cm）
         block_traj: (steps, 3) 方块位置轨迹
     """
     # 初始化
@@ -51,24 +53,21 @@ def run_rollout(model, data, policy, block_id, max_steps=1200):
     block_traj = []
 
     for step in range(max_steps):
-        # 构造观测（含时间特征 [step/N]）
         raw_obs = np.concatenate([data.qpos.copy(), data.qvel.copy()])
         time_feat = np.array([step / max_steps])
         obs = np.concatenate([raw_obs, time_feat])
-
-        # 策略推理
         act = policy.predict(obs)
-
-        # 执行
         data.ctrl[:7] = act[:7]
-        data.ctrl[7] = max(0.0, min(255.0, act[7]))  # 钳制 gripper
-
+        data.ctrl[7] = max(0.0, min(255.0, act[7]))
         mujoco.mj_step(model, data)
         block_traj.append(data.xpos[block_id].copy())
 
-    block_end = data.xpos[block_id].copy()
+    block_traj = np.array(block_traj)
+    block_end = block_traj[-1]
     displacement = float(np.linalg.norm(block_end[:2] - block_start[:2]))
-    return displacement, np.array(block_traj)
+    max_lift = float(block_traj[:, 2].max())
+    lifted = max_lift > block_start[2] + 0.03  # 至少抬起 3cm
+    return displacement, max_lift, lifted, block_traj
 
 
 def run_rollout_with_render(model, data, policy, block_id, video_path=None,
@@ -108,7 +107,7 @@ def run_rollout_with_render(model, data, policy, block_id, video_path=None,
 
     block_end = data.xpos[block_id].copy()
     displacement = float(np.linalg.norm(block_end[:2] - block_start[:2]))
-    return displacement
+    return displacement  # run_rollout_with_render 不返回 lifted 信息
 
 
 def main():
@@ -151,14 +150,14 @@ def main():
 
     # ---- 评估 ----
     displacements = []
-    first_noise = None  # 保存第一个 episode 的扰动，供 viewer 重放
+    lifted_flags = []
+    max_lifts = []
+    first_noise = None
     for ep in range(args.episodes):
-        # 泛化测试: 扰动方块初始位置
-        # 方块世界 X = body_pos_X(0.4) + qpos_X，所以要偏移 ±2cm 需设 qpos_X = noise
         if args.generalize:
             noise = np.random.uniform(-0.02, 0.02, size=2)
             if first_noise is None:
-                first_noise = noise.copy()  # 保存 episode 1 的扰动
+                first_noise = noise.copy()
             data.qpos[9] = noise[0]
             data.qpos[10] = noise[1]
             mujoco.mj_forward(model, data)
@@ -170,21 +169,34 @@ def main():
                 model, data, policy, block_id,
                 video_path=args.video, max_steps=args.max_steps,
             )
+            lifted = None
+            max_lift = None
         else:
-            disp, _ = run_rollout(model, data, policy, block_id, max_steps=args.max_steps)
+            disp, max_lift, lifted, _ = run_rollout(
+                model, data, policy, block_id, max_steps=args.max_steps,
+            )
 
         displacements.append(disp)
-        status = "✅" if disp > 0.10 else ("⚠" if disp > 0.05 else "❌")
-        print(f"  Episode {ep+1}: 方块位移={disp:.3f}m {status}")
+        if lifted is not None:
+            lifted_flags.append(lifted)
+            max_lifts.append(max_lift)
+
+        # 双标准评判: 位移 > 10cm 且 被抬起过
+        is_success = disp > 0.10
+        if lifted is not None:
+            is_success = is_success and lifted
+        status = "✅" if is_success else ("⚠" if disp > 0.05 else "❌")
+        lift_str = f"max_z={max_lift:.3f}m" if max_lift is not None else ""
+        print(f"  Episode {ep+1}: 位移={disp:.3f}m {lift_str} {status}")
 
     # ---- 汇总 ----
     disp_arr = np.array(displacements)
+    n_lifted = sum(lifted_flags) if lifted_flags else 0
     print(f"\n[result] 评估汇总:")
-    print(f"  平均位移:  {disp_arr.mean():.3f}m ± {disp_arr.std():.3f}")
-    print(f"  最大位移:  {disp_arr.max():.3f}m")
-    print(f"  最小位移:  {disp_arr.min():.3f}m")
-    print(f"  成功率:    {(disp_arr > 0.10).sum()}/{len(disp_arr)} "
-          f"({100*(disp_arr > 0.10).mean():.0f}%)")
+    print(f"  平均位移:     {disp_arr.mean():.3f}m ± {disp_arr.std():.3f}")
+    print(f"  被抬起次数:   {n_lifted}/{len(lifted_flags) if lifted_flags else '?'}")
+    print(f"  成功率(位移>10cm 且 被抬起): {n_lifted}/{len(displacements)}"
+          f" ({100*n_lifted/max(1,len(displacements)):.0f}%)")
 
     # ---- Viewer（可选） ----
     # viewer 重放第一个 episode 的场景，方便和终端输出的位移数据对照
