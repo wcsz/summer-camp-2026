@@ -22,6 +22,7 @@ import sys
 import time
 from pathlib import Path
 
+import imageio
 import mujoco
 import mujoco.viewer
 import numpy as np
@@ -60,6 +61,11 @@ def build_scene_xml():
     scene_elements = """
     <!-- ===== 地面 ===== -->
     <geom name="floor" size="0 0 0.01" type="plane" rgba="0.5 0.5 0.5 1"/>
+
+    <!-- ===== 录制摄像机 ===== -->
+    <!-- 从右前方俯视，框住整个 pick-and-place 操作区域 -->
+    <camera name="record_cam" mode="fixed"
+            pos="0.8 -0.5 0.6" xyaxes="-0.7 -0.7 0 0.4 -0.4 0.8"/>
 
     <!-- ===== 桌子 ===== -->
     <!-- 桌面：40cm × 40cm × 2cm，桌体中心在 z=0.04，桌面在 z=0.06 -->
@@ -481,6 +487,17 @@ def main():
     )
     parser.add_argument("--no-viewer", action="store_true",
                         help="仅采集数据，不显示 viewer")
+    parser.add_argument("--record", action="store_true",
+                        help="录制第一次抓取过程为 MP4 视频（使用 offscreen 渲染）")
+    parser.add_argument("--video", type=str,
+                        default="results/pick_place_demo.mp4",
+                        help="录制视频输出路径 (默认: results/pick_place_demo.mp4)")
+    parser.add_argument("--fps", type=int, default=30,
+                        help="视频帧率 (默认: 30)")
+    parser.add_argument("--resolution", nargs=2, type=int,
+                        default=[640, 480],
+                        metavar=("WIDTH", "HEIGHT"),
+                        help="视频分辨率 (默认: 640 480)")
     parser.add_argument("--output", "-o", type=str,
                         default="results/pick_place_demo.npz",
                         help="输出 .npz 路径 (默认: results/pick_place_demo.npz)")
@@ -558,6 +575,15 @@ def main():
     data.ctrl[7] = 255
     mujoco.mj_forward(model, data)
 
+    # ---- 录制: 创建 offscreen renderer ----
+    video_frames = None
+    renderer = None
+    if args.record:
+        w, h = args.resolution
+        renderer = mujoco.Renderer(model, width=w, height=h)
+        video_frames = []
+        print(f"[record] 🎥 录制模式: {w}×{h} @ {args.fps}fps")
+
     observations = []
     actions_list = []
     block_traj = []
@@ -594,6 +620,12 @@ def main():
         # 仿真
         mujoco.mj_step(model, data)
         block_traj.append(data.xpos[block_id].copy())
+
+        # 录制: 渲染当前帧
+        if renderer is not None:
+            renderer.update_scene(data, camera="record_cam")
+            pixels = renderer.render()
+            video_frames.append(pixels.copy())
 
     obs = np.array(observations)
     act = np.array(actions_list)
@@ -636,9 +668,24 @@ def main():
     print(f"\n[save] ✅ 数据已保存: {output_path}")
     print(f"        obs={obs.shape}, act={act.shape}")
 
+    # ---- 保存视频 ----
+    if video_frames is not None:
+        video_path = Path(args.video)
+        video_path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"[video] 正在编码视频 ({len(video_frames)} 帧)...")
+        imageio.mimsave(str(video_path), video_frames, fps=args.fps)
+        # mimsave 在某些版本中返回的是迭代器，需要显式消费
+        print(f"[video] ✅ 视频已保存: {video_path}")
+        print(f"        分辨率: {args.resolution[0]}×{args.resolution[1]}, "
+              f"帧率: {args.fps} fps, "
+              f"时长: {len(video_frames)/args.fps:.1f}s")
+        renderer.close()
+
     # ---- Viewer 可视化 ----
-    if not args.no_viewer:
+    if not args.no_viewer and not args.record:
         run_viewer_playback(model, data, body_id, joint_traj)
+    elif args.record:
+        print(f"\n[info] 录制模式下跳过 viewer（视频已保存到 {args.video}）")
 
     print("\n👋 完成")
 
