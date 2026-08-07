@@ -24,36 +24,58 @@ pip install -r requirements.txt
 ├── envs/              ← 自定义 MuJoCo 场景 (XML)
 ├── algorithms/        ← 算法实现
 │   ├── bc.py          ← 行为克隆 (Behavior Cloning)
-│   └── ...
+│   └── diffusion_policy.py ← Diffusion Policy (DDPM + DDIM + x₀预测)
 ├── scripts/           ← 运行脚本
-│   ├── collect_demo.py ← 采集 expert demonstration
-│   ├── train.py        ← 训练入口
-│   └── eval.py         ← 评估
+│   ├── draw_circle.py        ← 第1步: Panda 机械臂画圆
+│   ├── collect_pick_place.py  ← 第2步: Pick-and-Place 演示收集
+│   ├── collect_demo.py       ← 演示收集 (旧版通用模板)
+│   ├── train_bc.py           ← 第3步: BC 训练入口
+│   ├── eval_bc.py            ← 第3步: BC 评估
+│   ├── train_dp.py           ← 第4步: Diffusion Policy 训练入口
+│   ├── eval_dp.py            ← 第4步: DP 评估
+│   ├── compare.py            ← 第4步: BC vs DP 对比汇总
+│   ├── train.py              ← 训练 (旧版通用模板)
+│   └── eval.py               ← 评估 (旧版通用模板)
 ├── results/           ← 实验输出
-│   ├── figures/       ← 图表
-│   └── logs/          ← 训练日志
+│   ├── bc_model.pth      ← BC 模型
+│   ├── bc_loss.png       ← BC 训练曲线
+│   ├── bc_rollout.mp4    ← BC 评估录屏
+│   ├── dp_model.pth      ← Diffusion Policy 模型
+│   ├── dp_loss.png       ← DP 训练曲线
+│   ├── dp_rollout.mp4    ← DP 评估录屏
+│   ├── pick_place_demo.npz ← 专家演示数据
+│   ├── pick_place_demo.mp4 ← 专家演示录屏
+│   ├── figures/          ← 图表
+│   └── logs/             ← 训练日志
 └── assets/            ← 额外资源 (Demo 视频等)
 ```
 
 ## 快速开始
 
 ```bash
-# 1. 采集 demonstration（生成训练数据）
-python scripts/collect_demo.py
+# === 完整链路: 数据 → BC → DP → 对比 ===
 
-# 2. 训练策略
-python scripts/train.py
+# 1. 采集 Pick-and-Place 专家演示数据
+python scripts/collect_pick_place.py --no-viewer
 
-# 3. 评估策略
-python scripts/eval.py
+# 2. 训练 BC baseline
+python scripts/train_bc.py
+
+# 3. 训练 Diffusion Policy
+python scripts/train_dp.py
+
+# 4. BC vs DP 对比评估
+python scripts/compare.py --episodes 10
 ```
 
 ## 实验结果
 
-| 实验 | 算法 | 配置 | 成功率 | 备注 |
-|---|---|---|---|---|
-| exp1_bc_baseline | BC | lr=1e-3, epochs=100 | ——% | 待运行 |
-| | | | | |
+| 实验 | 算法 | 配置 | 泛化成功率 | 备注 |
+|------|------|------|-----------|------|
+| exp1_bc_baseline | BC (MLP) | lr=1e-3, epochs=169 | 0/10 (0%) | 灾难性失败——方块被弹飞 |
+| exp2_diffusion_policy | Diffusion Policy (x₀+DDIM) | lr=3e-4, epochs=385 | 2/10 (20%) | 温和失败——方块留在桌面 |
+
+> **核心发现**: DP 的成功率虽然不高，但失败模式与 BC 根本不同——BC 在分布外状态产生失控力弹飞方块，DP 的动作块时间一致性保证轨迹平滑、失败温和。
 
 ## 参考资料
 
